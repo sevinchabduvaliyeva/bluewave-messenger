@@ -33,7 +33,7 @@ const emojiPicker = document.getElementById('emoji-picker');
 
 // Socket ulanishi va holat o'zgaruvchilari
 const socket = io();
-const CURRENT_ROOM = "bluewave-room-1";
+let CURRENT_ROOM = "bluewave-room-1";
 socket.emit('join_room', CURRENT_ROOM);
 
 let isPeerOnline = false;
@@ -41,53 +41,138 @@ let peerLastSeen = null;
 let typingTimeout = null;
 
 function normalizePhone(phone = '') {
-  return phone.replace(/\D/g, '');
+    return String(phone).replace(/\D/g, '');
 }
 
 function getDirectRoomId(phoneA, phoneB) {
-  const a = normalizePhone(phoneA);
-  const b = normalizePhone(phoneB);
-  return 'dm_' + [a, b].sort().join('_');
+    const a = normalizePhone(phoneA);
+    const b = normalizePhone(phoneB);
+    if (!a || !b) return null;
+    return 'dm_' + [a, b].sort().join('_');
 }
+
+// +998 xx xxx xx xx formatlash
+function attachPhoneMask(inputEl) {
+    if (!inputEl) return;
+
+    inputEl.addEventListener('focus', () => {
+        if (!inputEl.value.trim()) {
+            inputEl.value = '+998 ';
+        }
+    });
+
+    inputEl.addEventListener('input', (e) => {
+        let digits = e.target.value.replace(/\D/g, '');
+        if (!digits.startsWith('998')) {
+            digits = '998' + digits.replace(/^998/, '');
+        }
+        digits = digits.substring(0, 12);
+
+        let formatted = '+998';
+        if (digits.length > 3) formatted += ' ' + digits.substring(3, 5);
+        if (digits.length > 5) formatted += ' ' + digits.substring(5, 8);
+        if (digits.length > 8) formatted += ' ' + digits.substring(8, 10);
+        if (digits.length > 10) formatted += ' ' + digits.substring(10, 12);
+
+        e.target.value = formatted;
+    });
+
+    inputEl.addEventListener('keydown', (e) => {
+        if (e.target.selectionStart <= 5 && (e.key === 'Backspace' || e.key === 'Delete')) {
+            e.preventDefault();
+        }
+    });
+}
+
+attachPhoneMask(document.getElementById('auth-phone'));
+attachPhoneMask(document.getElementById('contact-phone'));
+attachPhoneMask(document.getElementById('my-phone-input'));
 
 let currentUser = JSON.parse(localStorage.getItem('bluewave_current_user')) || null;
 
 const authModal = document.getElementById('auth-modal');
 const authForm = document.getElementById('auth-form');
+const authErrorEl = document.getElementById('auth-error');
+
+function saveAll() {
+    localStorage.setItem('bluewave_contacts', JSON.stringify(contacts));
+    localStorage.setItem('bluewave_profile', JSON.stringify(myProfile));
+    if (currentUser) {
+        localStorage.setItem('bluewave_current_user', JSON.stringify(currentUser));
+    }
+}
 
 function initAuthState() {
-  if (!currentUser || !currentUser.phone) {
-    authModal?.classList.remove('hidden');
-    return;
-  }
-  authModal?.classList.add('hidden');
-  socket.emit('register_user', currentUser);
+    if (!currentUser || !currentUser.phone) {
+        authModal?.classList.remove('hidden');
+        return;
+    }
+    authModal?.classList.add('hidden');
+    myProfile.name = currentUser.name || myProfile.name;
+    myProfile.phone = currentUser.phone;
+    saveAll();
+    socket.emit('register_user', currentUser);
 }
 
 authForm?.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const name = document.getElementById('auth-name').value.trim();
-  const phone = document.getElementById('auth-phone').value.trim();
-  if (!name || !phone) return;
+    e.preventDefault();
+    const nameInput = document.getElementById('auth-name');
+    const phoneInput = document.getElementById('auth-phone');
+    const name = nameInput?.value.trim() || '';
+    const phone = phoneInput?.value.trim() || '';
 
-  currentUser = { name, phone };
-  localStorage.setItem('bluewave_current_user', JSON.stringify(currentUser));
-  authModal?.classList.add('hidden');
-  socket.emit('register_user', currentUser);
+    if (!name || phone.length < 17) {
+        if (authErrorEl) {
+            authErrorEl.textContent = "Ism va to'liq telefon raqamni (+998 XX XXX XX XX) kiriting.";
+        } else {
+            alert("Iltimos, ism va to'liq telefon raqamni kiriting: +998 xx xxx xx xx");
+        }
+        return;
+    }
+
+    if (authErrorEl) authErrorEl.textContent = '';
+
+    currentUser = { name, phone };
+    myProfile.name = name;
+    myProfile.phone = phone;
+    saveAll();
+    renderMyProfile();
+
+    authModal?.classList.add('hidden');
+    socket.emit('register_user', currentUser);
 });
 
 // Kontakt tanlanganda yoki qo'shilganda ikki raqam orasidagi shaxsiy xonaga kirish
 function connectToContactByPhone(contact) {
-  if (!currentUser || !contact?.phone) return;
-  const roomId = getDirectRoomId(currentUser.phone, contact.phone);
-  CURRENT_ROOM = roomId;
-  socket.emit('join_direct_chat', {
-    myPhone: currentUser.phone,
-    targetPhone: contact.phone
-  });
+    if (!contact) return;
+
+    if (currentUser?.phone && contact?.phone) {
+        const roomId = getDirectRoomId(currentUser.phone, contact.phone);
+        if (roomId) {
+            CURRENT_ROOM = roomId;
+            socket.emit('join_direct_chat', {
+                myPhone: currentUser.phone,
+                targetPhone: contact.phone
+            });
+            return;
+        }
+    }
+
+    socket.emit('join_room', CURRENT_ROOM);
 }
 
-initAuthState();
+socket.on('connect', () => {
+    if (currentUser && currentUser.phone) {
+        socket.emit('register_user', currentUser);
+    }
+    if (activeContactId) {
+        const contact = contacts.find(c => c.id === activeContactId);
+        if (contact) connectToContactByPhone(contact);
+    } else {
+        socket.emit('join_room', CURRENT_ROOM);
+    }
+});
+
 // Sarlavhadagi status matnini yangilash
 function updateChatStatusText(isTyping = false) {
     const statusEl = document.getElementById('chat-status');
@@ -123,39 +208,6 @@ function readFileAsDataURL(file, callback) {
     const reader = new FileReader();
     reader.onload = (e) => callback(e.target.result);
     reader.readAsDataURL(file);
-}
-
-// +998 xx xxx xx xx formatlash
-function attachPhoneMask(inputEl) {
-    inputEl.addEventListener('input', (e) => {
-        let digits = e.target.value.replace(/\D/g, '');
-        if (!digits.startsWith('998')) {
-            digits = '998' + digits.replace(/^998/, '');
-        }
-        digits = digits.substring(0, 12);
-
-        let formatted = '+998';
-        if (digits.length > 3) formatted += ' ' + digits.substring(3, 5);
-        if (digits.length > 5) formatted += ' ' + digits.substring(5, 8);
-        if (digits.length > 8) formatted += ' ' + digits.substring(8, 10);
-        if (digits.length > 10) formatted += ' ' + digits.substring(10, 12);
-
-        e.target.value = formatted;
-    });
-
-    inputEl.addEventListener('keydown', (e) => {
-        if (e.target.selectionStart <= 5 && (e.key === 'Backspace' || e.key === 'Delete')) {
-            e.preventDefault();
-        }
-    });
-}
-
-attachPhoneMask(document.getElementById('contact-phone'));
-attachPhoneMask(document.getElementById('my-phone-input'));
-
-function saveAll() {
-    localStorage.setItem('bluewave_contacts', JSON.stringify(contacts));
-    localStorage.setItem('bluewave_profile', JSON.stringify(myProfile));
 }
 
 function renderMyProfile() {
@@ -224,6 +276,9 @@ function openChat(id) {
 
     document.getElementById('chat-name').textContent = `${contact.name} (${contact.phone})`;
     document.getElementById('chat-avatar').innerHTML = getAvatarContent(contact.avatar, contact.name);
+
+    isPeerOnline = false;
+    connectToContactByPhone(contact);
 
     renderContacts(searchInput.value);
     renderMessages(contact);
@@ -300,21 +355,59 @@ function renderMessages(contact) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// Xabarga reaksiya bosish / olib tashlash
-window.toggleReaction = function(contactId, msgId, emoji) {
-    const contact = contacts.find(c => c.id === contactId);
+function applyReactionLocal(contactId, msgId, emoji, forceState = null) {
+    const contact = contacts.find(c => c.id == contactId);
     if (!contact) return;
-    const msg = contact.messages.find(m => m.id === msgId);
+    const msg = contact.messages.find(m => m.id == msgId);
     if (!msg) return;
 
     if (!msg.reactions) msg.reactions = {};
-    msg.reactions[emoji] = msg.reactions[emoji] ? 0 : 1;
+    if (typeof forceState === 'boolean') {
+        msg.reactions[emoji] = forceState ? 1 : 0;
+    } else {
+        msg.reactions[emoji] = msg.reactions[emoji] ? 0 : 1;
+    }
 
     saveAll();
-    if (activeContactId === contactId) {
+    if (activeContactId == contact.id) {
         renderMessages(contact);
     }
+    return Boolean(msg.reactions[emoji]);
+}
+
+// Xabarga reaksiya bosish / olib tashlash + narigi qurilmaga yuborish
+window.toggleReaction = function(contactId, msgId, emoji) {
+    const isNowActive = applyReactionLocal(contactId, msgId, emoji);
+    if (typeof isNowActive !== 'boolean') return;
+
+    const contact = contacts.find(c => c.id == contactId);
+    socket.emit('add_reaction', {
+        roomId: CURRENT_ROOM,
+        senderPhone: currentUser?.phone || myProfile.phone,
+        targetPhone: contact?.phone,
+        msgId,
+        emoji,
+        active: isNowActive
+    });
 };
+
+socket.on('add_reaction', (data = {}) => {
+    const msgId = data.msgId || data.messageId;
+    if (!msgId || !data.emoji) return;
+
+    let targetContact = contacts.find(c => c.id === activeContactId);
+    if (!targetContact && data.senderPhone) {
+        targetContact = contacts.find(c => normalizePhone(c.phone) === normalizePhone(data.senderPhone));
+    }
+    if (!targetContact) return;
+
+    applyReactionLocal(
+        targetContact.id,
+        msgId,
+        data.emoji,
+        typeof data.active === 'boolean' ? data.active : null
+    );
+});
 
 // Tanlangan bitta xabarni o'chirish
 window.deleteMessage = function(contactId, msgId) {
@@ -337,6 +430,10 @@ function getCurrentTime() {
 function sendMessage(type, content, fileName = '') {
     if (!activeContactId) return;
     const contact = contacts.find(c => c.id === activeContactId);
+    if (!contact) return;
+
+    const senderPhone = currentUser?.phone || myProfile.phone;
+    const senderName = currentUser?.name || myProfile.name;
 
     const newMsg = {
         id: Date.now(),
@@ -344,6 +441,8 @@ function sendMessage(type, content, fileName = '') {
         content,
         fileName,
         sender: 'out',
+        senderPhone,
+        senderName,
         time: getCurrentTime(),
         read: false,
         reactions: {}
@@ -354,9 +453,17 @@ function sendMessage(type, content, fileName = '') {
     renderMessages(contact);
     renderContacts(searchInput.value);
 
-    socket.emit('typing', { roomId: CURRENT_ROOM, isTyping: false });
+    socket.emit('typing', {
+        roomId: CURRENT_ROOM,
+        senderPhone,
+        targetPhone: contact.phone,
+        isTyping: false
+    });
+
     socket.emit('send_message', {
         roomId: CURRENT_ROOM,
+        senderPhone,
+        targetPhone: contact.phone,
         message: newMsg
     });
 }
@@ -377,7 +484,25 @@ socket.on('user_typing', (isTyping) => {
 
 // Boshqa odamdan real xabar kelganda
 socket.on('receive_message', (msg) => {
-    const targetContact = contacts.find(c => c.id === activeContactId) || contacts[0];
+    if (!msg) return;
+
+    let targetContact = null;
+    if (msg.senderPhone) {
+        targetContact = contacts.find(c => normalizePhone(c.phone) === normalizePhone(msg.senderPhone));
+        if (!targetContact) {
+            targetContact = {
+                id: Date.now() + Math.floor(Math.random() * 1000),
+                name: msg.senderName || msg.senderPhone,
+                phone: msg.senderPhone,
+                avatar: "",
+                messages: []
+            };
+            contacts.unshift(targetContact);
+        }
+    } else {
+        targetContact = contacts.find(c => c.id === activeContactId) || contacts[0];
+    }
+
     if (!targetContact) return;
 
     const isChatOpen = activeContactId === targetContact.id && !document.hidden;
@@ -396,6 +521,8 @@ socket.on('receive_message', (msg) => {
         renderMessages(targetContact);
         socket.emit('message_read', {
             roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone || myProfile.phone,
+            targetPhone: targetContact.phone,
             messageId: msg.id
         });
     }
@@ -416,19 +543,26 @@ socket.on('message_was_read', (msgId) => {
 
 // Matnli xabar va "yozmoqda..." signali
 messageInput.addEventListener('input', () => {
+    const contact = contacts.find(c => c.id === activeContactId);
+    const payloadBase = {
+        roomId: CURRENT_ROOM,
+        senderPhone: currentUser?.phone || myProfile.phone,
+        targetPhone: contact?.phone
+    };
+
     if (messageInput.value.trim().length > 0) {
         sendBtn.classList.remove('hidden');
         recordBtn.classList.add('hidden');
-        socket.emit('typing', { roomId: CURRENT_ROOM, isTyping: true });
+        socket.emit('typing', { ...payloadBase, isTyping: true });
 
         clearTimeout(typingTimeout);
         typingTimeout = setTimeout(() => {
-            socket.emit('typing', { roomId: CURRENT_ROOM, isTyping: false });
+            socket.emit('typing', { ...payloadBase, isTyping: false });
         }, 1500);
     } else {
         sendBtn.classList.add('hidden');
         recordBtn.classList.remove('hidden');
-        socket.emit('typing', { roomId: CURRENT_ROOM, isTyping: false });
+        socket.emit('typing', { ...payloadBase, isTyping: false });
     }
 });
 
@@ -714,8 +848,10 @@ profileForm.addEventListener('submit', (e) => {
     }
 
     myProfile = { name, phone, bio, avatar: tempMyAvatar };
+    currentUser = { name, phone };
     saveAll();
     renderMyProfile();
+    socket.emit('register_user', currentUser);
     profileModal.classList.add('hidden');
 });
 
@@ -755,9 +891,12 @@ async function setupPeerConnection(isVideo) {
     };
 
     peerConnection.onicecandidate = (event) => {
+        const contact = contacts.find(c => c.id === activeContactId);
         if (event.candidate) {
             socket.emit('ice_candidate', {
                 roomId: CURRENT_ROOM,
+                senderPhone: currentUser?.phone || myProfile.phone,
+                targetPhone: contact?.phone,
                 candidate: event.candidate
             });
         }
@@ -767,6 +906,9 @@ async function setupPeerConnection(isVideo) {
 async function startCall(isVideo = false) {
     if (!activeContactId) return;
     const contact = contacts.find(c => c.id === activeContactId);
+    if (!contact) return;
+
+    connectToContactByPhone(contact);
 
     document.getElementById('call-avatar').innerHTML = getAvatarContent(contact.avatar, contact.name);
     document.getElementById('call-contact-name').textContent = contact.name;
@@ -778,17 +920,29 @@ async function startCall(isVideo = false) {
         await setupPeerConnection(isVideo);
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
-        socket.emit('call_offer', { roomId: CURRENT_ROOM, offer, isVideo });
+        socket.emit('call_offer', {
+            roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone || myProfile.phone,
+            targetPhone: contact.phone,
+            offer,
+            isVideo
+        });
     } catch (err) {
         alert("Mikrofon yoki kameraga ruxsat berilmadi!");
         endCallCleanup(false);
     }
 }
 
-socket.on('call_offer', async ({ offer, isVideo }) => {
+socket.on('call_offer', async ({ offer, isVideo, roomId, senderPhone }) => {
+    if (roomId) CURRENT_ROOM = roomId;
+
     const accept = confirm(isVideo ? "Kiruvchi video qo'ng'iroq. Qabul qilasizmi?" : "Kiruvchi audio qo'ng'iroq. Qabul qilasizmi?");
     if (!accept) {
-        socket.emit('end_call', CURRENT_ROOM);
+        socket.emit('end_call', {
+            roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone || myProfile.phone,
+            targetPhone: senderPhone
+        });
         return;
     }
 
@@ -800,7 +954,12 @@ socket.on('call_offer', async ({ offer, isVideo }) => {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
-        socket.emit('call_answer', { roomId: CURRENT_ROOM, answer });
+        socket.emit('call_answer', {
+            roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone || myProfile.phone,
+            targetPhone: senderPhone,
+            answer
+        });
     } catch (err) {
         alert("Qo'ng'iroqni qabul qilishda xatolik!");
         endCallCleanup(false);
@@ -822,7 +981,14 @@ socket.on('ice_candidate', async ({ candidate }) => {
 
 function endCallCleanup(notifyPeer = true) {
     clearInterval(callInterval);
-    if (notifyPeer) socket.emit('end_call', CURRENT_ROOM);
+    if (notifyPeer) {
+        const contact = contacts.find(c => c.id === activeContactId);
+        socket.emit('end_call', {
+            roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone || myProfile.phone,
+            targetPhone: contact?.phone
+        });
+    }
     if (peerConnection) {
         peerConnection.close();
         peerConnection = null;
@@ -837,19 +1003,18 @@ function endCallCleanup(notifyPeer = true) {
 socket.on('end_call', () => endCallCleanup(false));
 
 document.getElementById('end-call-btn').addEventListener('click', () => endCallCleanup(true));
-
 document.getElementById('audio-call-btn').addEventListener('click', () => startCall(false));
 document.getElementById('video-call-btn').addEventListener('click', () => startCall(true));
-
-document.getElementById('end-call-btn').addEventListener('click', () => {
-    clearInterval(callInterval);
-    callModal.classList.add('hidden');
-});
 
 document.getElementById('mute-call-btn').addEventListener('click', (e) => {
     const icon = e.currentTarget.querySelector('i');
     icon.classList.toggle('fa-microphone');
     icon.classList.toggle('fa-microphone-slash');
+    if (localStream) {
+        localStream.getAudioTracks().forEach(track => {
+            track.enabled = !track.enabled;
+        });
+    }
 });
 
 searchInput.addEventListener('input', (e) => renderContacts(e.target.value));
@@ -863,21 +1028,8 @@ document.getElementById('clear-chat-btn').addEventListener('click', () => {
         renderMessages(contact);
         renderContacts(searchInput.value);
     }
-});function sendReaction(messageId, emoji) {
-    // 1. O'zingizda reaksiyani qo'shish/yangilash funksiyangizni chaqiring
-    applyReactionToMessage(messageId, emoji);
-
-    // 2. Ikkinchi qurilmaga Socket.io orqali yuborish
-    socket.emit('add_reaction', {
-        roomId: CURRENT_ROOM,
-        messageId: messageId,
-        emoji: emoji
-    });
-}
-
-socket.on('add_reaction', ({ messageId, emoji }) => {
-    applyReactionToMessage(messageId, emoji);
 });
 
+initAuthState();
 renderMyProfile();
 renderContacts();

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BlueWave Messenger</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Chap panel -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="user-profile" id="open-profile-btn" title="Profilni ko'rish va tahrirlash">
+                    <div class="avatar my-avatar" id="my-avatar-display">M</div>
+                    <div class="my-info">
+                        <span id="my-name-display">Mening Profilim</span>
+                        <small id="my-status-display">Onlayn</small>
+                    </div>
+                </div>
+                <div class="header-actions">
+                    <button id="open-contacts-list-btn" title="Kontaktlar ro'yxati"><i class="fas fa-address-book"></i></button>
+                    <button id="open-add-modal-btn" title="Yangi kontakt qo'shish"><i class="fas fa-user-plus"></i></button>
+                </div>
+            </div>
+
+            <div class="search-box">
+                <i class="fas fa-search"></i>
+                <input type="text" id="search-input" placeholder="Kontaktlarni qidirish...">
+            </div>
+
+            <div class="contacts-list" id="contacts-list"></div>
+        </aside>
+
+        <!-- O'ng panel: Chat oynasi -->
+        <main class="chat-area">
+            <div id="empty-chat" class="empty-chat">
+                <div class="empty-icon-circle">
+                    <i class="fas fa-paper-plane"></i>
+                </div>
+                <h3>BlueWave Messenger</h3>
+                <p>Suhbatni boshlash uchun chap ro'yxatdan kontaktni tanlang</p>
+            </div>
+
+            <div id="active-chat" class="active-chat hidden">
+                <header class="chat-header">
+                    <div class="chat-user-info">
+                        <div class="avatar" id="chat-avatar">A</div>
+                        <div>
+                            <h4 id="chat-name">Ism Familiya</h4>
+                            <span id="chat-status" class="status-online">onlayn</span>
+                        </div>
+                    </div>
+                    <div class="chat-actions">
+                        <button id="audio-call-btn" title="Ovozli qo'ng'iroq"><i class="fas fa-phone-alt"></i></button>
+                        <button id="video-call-btn" title="Video qo'ng'iroq"><i class="fas fa-video"></i></button>
+                        <button id="edit-contact-btn" title="Kontaktni tahrirlash"><i class="fas fa-edit"></i></button>
+                        <button id="delete-contact-btn" title="Kontaktni o'chirish" class="danger-btn"><i class="fas fa-user-times"></i></button>
+                        <button id="clear-chat-btn" title="Yozishmani tozalash"><i class="fas fa-broom"></i></button>
+                    </div>
+                </header>
+
+                <div class="messages-container" id="messages-container"></div>
+
+                <div id="emoji-picker" class="emoji-picker hidden">
+                    <span>😀</span><span>😂</span><span>😍</span><span>🥰</span><span>😎</span>
+                    <span>😭</span><span>😡</span><span>👍</span><span>👎</span><span>❤️</span>
+                    <span>🔥</span><span>🎉</span><span>🤝</span><span>🙏</span><span>✨</span>
+                </div>
+
+                <footer class="chat-input-area">
+                    <button id="emoji-btn" title="Emoji"><i class="far fa-smile"></i></button>
+                    
+                    <label for="file-input" class="attach-btn" title="Rasm yoki fayl yuborish">
+                        <i class="fas fa-paperclip"></i>
+                    </label>
+                    <input type="file" id="file-input" hidden>
+
+                    <input type="text" id="message-input" placeholder="Xabar yozing...">
+                    
+                    <button id="record-btn" title="Ovozli xabar yozish"><i class="fas fa-microphone"></i></button>
+                    <button id="send-btn" class="send-btn hidden" title="Yuborish"><i class="fas fa-paper-plane"></i></button>
+                </footer>
+            </div>
+        </main>
+    </div>
+
+    <!-- 1. Alohida Kontaktlar ro'yxati modali -->
+    <div id="contacts-directory-modal" class="modal hidden">
+        <div class="modal-content large-modal">
+            <div class="modal-header">
+                <h3><i class="fas fa-address-book"></i> Kontaktlar ro'yxati</h3>
+                <button class="close-modal" data-target="contacts-directory-modal"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="directory-search">
+                <input type="text" id="directory-search-input" placeholder="Kontakt ismi yoki raqami bo'yicha qidirish...">
+            </div>
+            <div id="directory-list" class="directory-list"></div>
+        </div>
+    </div>
+
+    <!-- 2. Kontakt qo'shish / tahrirlash modali -->
+    <div id="contact-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="contact-modal-title">Yangi kontakt qo'shish</h3>
+                <button class="close-modal" data-target="contact-modal"><i class="fas fa-times"></i></button>
+            </div>
+            <form id="contact-form">
+                <input type="hidden" id="edit-contact-id">
+                <div class="form-group">
+                    <label>Avatar rasmi (ixtiyoriy)</label>
+                    <div class="avatar-upload-row">
+                        <div class="avatar large-avatar" id="contact-avatar-preview">K</div>
+                        <label for="contact-avatar-file" class="upload-photo-btn">
+                            <i class="fas fa-camera"></i> Rasm tanlash
+                        </label>
+                        <input type="file" id="contact-avatar-file" accept="image/*" hidden>
+                        <button type="button" id="clear-contact-avatar-btn" class="small-clear-btn" title="Rasmni o'chirish"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Ism va Familiya</label>
+                    <input type="text" id="contact-name" required placeholder="Masalan: Azizbek">
+                </div>
+                <div class="form-group">
+                    <label>Telefon raqam</label>
+                    <input type="text" id="contact-phone" value="+998 " maxlength="17" required>
+                </div>
+                <button type="submit" class="submit-btn">Saqlash</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 3. Mening Profilim modali -->
+    <div id="profile-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Mening Profilim</h3>
+                <button class="close-modal" data-target="profile-modal"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="profile-preview">
+                <div class="avatar large-avatar" id="profile-modal-avatar">M</div>
+                <label for="my-avatar-file" class="upload-photo-btn">
+                    <i class="fas fa-camera"></i> Profil rasmini o'zgartirish
+                </label>
+                <input type="file" id="my-avatar-file" accept="image/*" hidden>
+            </div>
+            <form id="profile-form">
+                <div class="form-group">
+                    <label>Ismingiz</label>
+                    <input type="text" id="my-name-input" required>
+                </div>
+                <div class="form-group">
+                    <label>Telefon raqamingiz</label>
+                    <input type="text" id="my-phone-input" value="+998 " maxlength="17" required>
+                </div>
+                <div class="form-group">
+                    <label>Bio / Status</label>
+                    <input type="text" id="my-bio-input" placeholder="O'zingiz haqingizda qisqacha...">
+                </div>
+                <button type="submit" class="submit-btn">O'zgarishlarni saqlash</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 4. Qo'ng'iroq oynasi -->
+    <div id="call-modal" class="modal hidden">
+        <div class="call-card">
+            <div class="call-pulse">
+                <div class="avatar call-avatar" id="call-avatar">A</div>
+            </div>
+            <h3 id="call-contact-name">Ism Familiya</h3>
+            <p id="call-contact-phone">+998 90 000 00 00</p>
+            <span id="call-timer" class="call-status">Qo'ng'iroq qilinmoqda...</span>
+            
+            <div class="call-controls">
+                <button id="mute-call-btn" class="call-control-btn" title="Mikrofonni o'chirish"><i class="fas fa-microphone"></i></button>
+                <button id="end-call-btn" class="end-call-btn" title="Qo'ng'iroqni yakunlash"><i class="fas fa-phone-slash"></i></button>
+            </div>
+        </div>
+    </div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="script.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

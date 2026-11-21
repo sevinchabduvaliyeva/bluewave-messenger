@@ -8,6 +8,22 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
+    <!-- Akkaunt yaratish / Kirish oynasi -->
+<div id="auth-modal" class="auth-modal">
+  <div class="auth-card">
+    <h2>BlueWave Messenger</h2>
+    <p>Davom etish uchun ismingiz va telefon raqamingizni kiriting</p>
+    <form id="auth-form">
+      <label for="auth-name">Ismingiz</label>
+      <input type="text" id="auth-name" placeholder="Masalan: Sevinch" required />
+
+      <label for="auth-phone">Telefon raqamingiz</label>
+      <input type="tel" id="auth-phone" placeholder="+998 90 123 45 67" required />
+
+      <button type="submit" id="auth-submit-btn">Akkaunt yaratish va kirish</button>
+    </form>
+  </div>
+</div>
     <div class="app-container">
         <!-- Chap panel -->
         <aside class="sidebar">

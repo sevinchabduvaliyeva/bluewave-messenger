@@ -1,686 +1,462 @@
-const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
-
-let myProfile = JSON.parse(localStorage.getItem('bluewave_profile')) || {
-    name: "Mening Profilim",
-    phone: "+998 90 000 00 00",
-    bio: "BlueWave foydalanuvchisi",
-    avatar: ""
-};
-
-let contacts = JSON.parse(localStorage.getItem('bluewave_contacts')) || [];
-
-let activeContactId = null;
-let mediaRecorder = null;
-let audioChunks = [];
-let callInterval = null;
-
-// Vaqtincha avatar rasmlari
-let tempContactAvatar = "";
-let tempMyAvatar = "";
-
-// DOM elementlar
-const contactsListEl = document.getElementById('contacts-list');
-const searchInput = document.getElementById('search-input');
-const emptyChatEl = document.getElementById('empty-chat');
-const activeChatEl = document.getElementById('active-chat');
-const messagesContainer = document.getElementById('messages-container');
-const messageInput = document.getElementById('message-input');
-const sendBtn = document.getElementById('send-btn');
-const recordBtn = document.getElementById('record-btn');
-const fileInput = document.getElementById('file-input');
-const emojiBtn = document.getElementById('emoji-btn');
-const emojiPicker = document.getElementById('emoji-picker');
-
-// Socket ulanishi va holat o'zgaruvchilari
 const socket = io();
-const CURRENT_ROOM = "bluewave-room-1";
-socket.emit('join_room', CURRENT_ROOM);
 
-let isPeerOnline = false;
-let peerLastSeen = null;
+function normalizePhone(phone = '') {
+    return String(phone).replace(/\D/g, '');
+}
+
+function getDirectRoomId(phoneA, phoneB) {
+    const a = normalizePhone(phoneA);
+    const b = normalizePhone(phoneB);
+    if (!a || !b) return null;
+    return 'dm_' + [a, b].sort().join('_');
+}
+
+// --- Foydalanuvchi akkaunti va kontaktlar ---
+let currentUser = JSON.parse(localStorage.getItem('bluewave_current_user')) || null;
+let contacts = JSON.parse(localStorage.getItem('bluewave_contacts')) || [];
+let messagesByContact = JSON.parse(localStorage.getItem('bluewave_messages')) || {};
+let activeContactId = null;
+let CURRENT_ROOM = 'bluewave-room-1';
 let typingTimeout = null;
 
-// Sarlavhadagi status matnini yangilash
-function updateChatStatusText(isTyping = false) {
-    const statusEl = document.getElementById('chat-status');
-    if (!statusEl) return;
+// DOM elementlar
+const authModal = document.getElementById('auth-modal');
+const authForm = document.getElementById('auth-form');
+const contactsListEl = document.getElementById('contacts-list');
+const addContactBtn = document.getElementById('add-contact-btn');
+const chatHeaderNameEl = document.getElementById('chat-header-name');
+const chatHeaderPhoneEl = document.getElementById('chat-header-phone');
+const chatHeaderStatusEl = document.getElementById('chat-header-status');
+const messagesContainerEl = document.getElementById('messages-container');
+const messageFormEl = document.getElementById('message-form');
+const messageInputEl = document.getElementById('message-input');
 
-    if (isTyping && isPeerOnline) {
-        statusEl.textContent = "yozmoqda...";
-        statusEl.style.color = "#0077ff";
+// Qo'ng'iroq oynasi elementlari
+const callModal = document.getElementById('call-modal');
+const callTimerEl = document.getElementById('call-timer');
+const callAvatarEl = document.getElementById('call-avatar');
+const callContactNameEl = document.getElementById('call-contact-name');
+const callContactPhoneEl = document.getElementById('call-contact-phone');
+
+let callInterval = null;
+let callSeconds = 0;
+
+function saveState() {
+    localStorage.setItem('bluewave_contacts', JSON.stringify(contacts));
+    localStorage.setItem('bluewave_messages', JSON.stringify(messagesByContact));
+}
+
+function getCurrentTime() {
+    const now = new Date();
+    return now.toTimeString().slice(0, 5);
+}
+
+// --- 1. Akkaunt yaratish va kirish ---
+function initAuthState() {
+    if (!currentUser || !currentUser.phone) {
+        authModal?.classList.remove('hidden');
         return;
     }
+    authModal?.classList.add('hidden');
+    socket.emit('register_user', currentUser);
+}
 
-    if (isPeerOnline) {
-        statusEl.textContent = "onlayn";
-        statusEl.style.color = "#0077ff";
-    } else {
-        statusEl.textContent = peerLastSeen
-            ? `oxirgi marta ${peerLastSeen} da onlayn edi`
-            : "oflayn";
-        statusEl.style.color = "#64748b";
+authForm?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const nameInput = document.getElementById('auth-name');
+    const phoneInput = document.getElementById('auth-phone');
+    const name = nameInput?.value.trim();
+    const phone = phoneInput?.value.trim();
+
+    if (!name || !phone) return;
+
+    currentUser = { name, phone };
+    localStorage.setItem('bluewave_current_user', JSON.stringify(currentUser));
+    authModal?.classList.add('hidden');
+    socket.emit('register_user', currentUser);
+});
+
+socket.on('connect', () => {
+    if (currentUser && currentUser.phone) {
+        socket.emit('register_user', currentUser);
     }
-}
-
-// Avatar HTML yaratuvchi yordamchi funksiya
-function getAvatarContent(avatarUrl, name) {
-    if (avatarUrl) {
-        return `<img src="${avatarUrl}" alt="${name}">`;
+    if (activeContactId) {
+        const contact = contacts.find(c => c.id === activeContactId);
+        if (contact) connectToContact(contact);
     }
-    return (name || "U").charAt(0).toUpperCase();
-}
+});
 
-// Faylni Base64 ga o'giruvchi funksiya
-function readFileAsDataURL(file, callback) {
-    const reader = new FileReader();
-    reader.onload = (e) => callback(e.target.result);
-    reader.readAsDataURL(file);
-}
-
-// +998 xx xxx xx xx formatlash
-function attachPhoneMask(inputEl) {
-    inputEl.addEventListener('input', (e) => {
-        let digits = e.target.value.replace(/\D/g, '');
-        if (!digits.startsWith('998')) {
-            digits = '998' + digits.replace(/^998/, '');
-        }
-        digits = digits.substring(0, 12);
-
-        let formatted = '+998';
-        if (digits.length > 3) formatted += ' ' + digits.substring(3, 5);
-        if (digits.length > 5) formatted += ' ' + digits.substring(5, 8);
-        if (digits.length > 8) formatted += ' ' + digits.substring(8, 10);
-        if (digits.length > 10) formatted += ' ' + digits.substring(10, 12);
-
-        e.target.value = formatted;
-    });
-
-    inputEl.addEventListener('keydown', (e) => {
-        if (e.target.selectionStart <= 5 && (e.key === 'Backspace' || e.key === 'Delete')) {
-            e.preventDefault();
-        }
-    });
-}
-
-attachPhoneMask(document.getElementById('contact-phone'));
-attachPhoneMask(document.getElementById('my-phone-input'));
-
-function saveAll() {
-    localStorage.setItem('bluewave_contacts', JSON.stringify(contacts));
-    localStorage.setItem('bluewave_profile', JSON.stringify(myProfile));
-}
-
-function renderMyProfile() {
-    document.getElementById('my-name-display').textContent = myProfile.name;
-    document.getElementById('my-status-display').textContent = myProfile.bio || "Onlayn";
-    document.getElementById('my-avatar-display').innerHTML = getAvatarContent(myProfile.avatar, myProfile.name);
-}
-
-function renderContacts(filter = '') {
+// --- 2. Kontakt qo'shish va ro'yxatni chizish ---
+function renderContacts() {
+    if (!contactsListEl) return;
     contactsListEl.innerHTML = '';
 
-    // Faqat kamida 1 ta xabari bor (yozishilgan) kontaktlarni ajratib olish
-    const chattedContacts = contacts.filter(c => c.messages && c.messages.length > 0);
+    contacts.forEach(contact => {
+        const item = document.createElement('div');
+        item.className = `contact-item ${contact.id === activeContactId ? 'active' : ''}`;
+        item.dataset.id = contact.id;
 
-    const filtered = chattedContacts.filter(c =>
-        c.name.toLowerCase().includes(filter.toLowerCase()) || c.phone.includes(filter)
-    );
+        const list = messagesByContact[contact.id] || [];
+        const lastMsg = list[list.length - 1];
+        const previewText = lastMsg ? lastMsg.text : contact.phone;
 
-    if (filtered.length === 0) {
-        contactsListEl.innerHTML = `
-            <div style="text-align:center; color:#64748b; padding:30px 15px; font-size:14px;">
-                <p>Hozircha faol suhbatlar yo'q.</p>
-                <small>Suhbat boshlash uchun yuqoridagi <i class="fas fa-address-book"></i> kontaktlar ro'yxatidan biror kishini tanlang.</small>
+        item.innerHTML = `
+            <div class="contact-info">
+                <div class="contact-name">${escapeHtml(contact.name)}</div>
+                <div class="contact-preview">${escapeHtml(previewText)}</div>
             </div>
         `;
+
+        item.addEventListener('click', () => selectContact(contact.id));
+        contactsListEl.appendChild(item);
+    });
+}
+
+addContactBtn?.addEventListener('click', () => {
+    const name = prompt("Kontakt ismini kiriting:")?.trim();
+    if (!name) return;
+
+    const phone = prompt("Kontakt telefon raqamini kiriting (masalan: +998 90 123 45 67):")?.trim();
+    if (!phone) return;
+
+    const cleanPhone = normalizePhone(phone);
+    const existing = contacts.find(c => normalizePhone(c.phone) === cleanPhone);
+    if (existing) {
+        selectContact(existing.id);
         return;
     }
 
-    filtered.forEach(contact => {
-        const lastMsg = contact.messages[contact.messages.length - 1];
-        let previewText = contact.phone;
-        let timeText = "";
+    const newContact = {
+        id: 'c_' + Date.now(),
+        name,
+        phone
+    };
 
-        if (lastMsg) {
-            timeText = lastMsg.time;
-            if (lastMsg.type === 'text') previewText = lastMsg.content;
-            else if (lastMsg.type === 'image') previewText = "📷 Rasm";
-            else if (lastMsg.type === 'audio') previewText = "🎤 Ovozli xabar";
-            else if (lastMsg.type === 'file') previewText = "📎 Fayl";
-        }
+    contacts.push(newContact);
+    if (!messagesByContact[newContact.id]) {
+        messagesByContact[newContact.id] = [];
+    }
+    saveState();
+    renderContacts();
+    selectContact(newContact.id);
+});
 
-        const div = document.createElement('div');
-        div.className = `contact-item ${contact.id === activeContactId ? 'active' : ''}`;
-        div.innerHTML = `
-            <div class="avatar">${getAvatarContent(contact.avatar, contact.name)}</div>
-            <div class="contact-info">
-                <div class="contact-top">
-                    <span class="contact-name">${contact.name}</span>
-                    <span class="contact-time">${timeText}</span>
-                </div>
-                <div class="contact-last-msg">${previewText}</div>
-            </div>
-        `;
-        div.onclick = () => openChat(contact.id);
-        contactsListEl.appendChild(div);
-    });
-}
-
-function openChat(id) {
-    activeContactId = id;
-    const contact = contacts.find(c => c.id === id);
+function connectToContact(contact) {
     if (!contact) return;
 
-    emptyChatEl.classList.add('hidden');
-    activeChatEl.classList.remove('hidden');
-
-    document.getElementById('chat-name').textContent = `${contact.name} (${contact.phone})`;
-    document.getElementById('chat-avatar').innerHTML = getAvatarContent(contact.avatar, contact.name);
-
-    renderContacts(searchInput.value);
-    renderMessages(contact);
-    updateChatStatusText(false);
+    if (currentUser?.phone && contact?.phone) {
+        const roomId = getDirectRoomId(currentUser.phone, contact.phone);
+        CURRENT_ROOM = roomId;
+        socket.emit('join_direct_chat', {
+            myPhone: currentUser.phone,
+            targetPhone: contact.phone
+        });
+    } else {
+        socket.emit('join_room', CURRENT_ROOM);
+    }
 }
 
-function renderMessages(contact) {
-    messagesContainer.innerHTML = '';
-    contact.messages.forEach(msg => {
-        if (!msg.reactions) msg.reactions = {};
-
-        const wrapper = document.createElement('div');
-        wrapper.className = `message-wrapper ${msg.sender === 'out' ? 'outgoing' : 'incoming'}`;
-
-        // Reaksiya va o'chirish tugmalari
-        const reactionBtnsHtml = QUICK_REACTIONS.map(emoji =>
-            `<button type="button" class="react-quick-btn" onclick="toggleReaction(${contact.id}, ${msg.id}, '${emoji}')">${emoji}</button>`
-        ).join('');
-
-        const toolbarHtml = `
-            <div class="message-toolbar">
-                ${reactionBtnsHtml}
-                <button type="button" class="delete-msg-btn" title="Xabarni o'chirish" onclick="deleteMessage(${contact.id}, ${msg.id})">
-                    <i class="fas fa-trash-alt"></i>
-                </button>
-            </div>
-        `;
-
-        let bodyHtml = '';
-        if (msg.type === 'text') {
-            bodyHtml = `<p>${msg.content}</p>`;
-        } else if (msg.type === 'image') {
-            bodyHtml = `<img class="chat-img" src="${msg.content}" alt="Rasm">`;
-        } else if (msg.type === 'audio') {
-            bodyHtml = `<audio controls src="${msg.content}"></audio>`;
-        } else if (msg.type === 'file') {
-            bodyHtml = `<a href="${msg.content}" download="${msg.fileName}" class="file-attachment">
-                            <i class="fas fa-file-alt fa-lg"></i>
-                            <span>${msg.fileName}</span>
-                        </a>`;
-        }
-
-        let tickHtml = '';
-        if (msg.sender === 'out') {
-            tickHtml = msg.read
-                ? '<i class="fas fa-check-double tick-read" title="O\'qildi"></i>'
-                : '<i class="fas fa-check tick-sent" title="Yuborildi"></i>';
-        }
-
-        // Qo'yilgan reaksiyalar
-        const reactionBadges = Object.entries(msg.reactions)
-            .filter(([, count]) => count > 0)
-            .map(([emoji, count]) =>
-                `<span class="reaction-badge" onclick="toggleReaction(${contact.id}, ${msg.id}, '${emoji}')">${emoji} ${count}</span>`
-            ).join('');
-
-        const reactionsRowHtml = reactionBadges
-            ? `<div class="reactions-row">${reactionBadges}</div>`
-            : '';
-
-        wrapper.innerHTML = `
-            ${toolbarHtml}
-            <div class="message">
-                ${bodyHtml}
-                <div class="msg-meta">
-                    <span>${msg.time}</span>
-                    ${tickHtml}
-                </div>
-            </div>
-            ${reactionsRowHtml}
-        `;
-        messagesContainer.appendChild(wrapper);
-    });
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-// Xabarga reaksiya bosish / olib tashlash
-window.toggleReaction = function(contactId, msgId, emoji) {
+function selectContact(contactId) {
+    activeContactId = contactId;
     const contact = contacts.find(c => c.id === contactId);
     if (!contact) return;
-    const msg = contact.messages.find(m => m.id === msgId);
+
+    renderContacts();
+    connectToContact(contact);
+
+    if (chatHeaderNameEl) chatHeaderNameEl.textContent = contact.name;
+    if (chatHeaderPhoneEl) chatHeaderPhoneEl.textContent = contact.phone;
+    if (chatHeaderStatusEl) chatHeaderStatusEl.textContent = "ulanmoqda...";
+
+    renderMessages();
+    markUnreadMessagesAsRead(contact);
+}
+
+// --- 3. Xabarlar, o'qilganlik va reaksiyalar ---
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+
+function escapeHtml(str = '') {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function renderReactionsHtml(msg) {
+    const reactions = msg.reactions || {};
+    const entries = Object.entries(reactions).filter(([, count]) => count > 0);
+    if (!entries.length) return '';
+
+    return `
+        <div class="message-reactions">
+            ${entries.map(([emoji, count]) => `
+                <span class="reaction-chip" data-emoji="${emoji}">${emoji} ${count}</span>
+            `).join('')}
+        </div>
+    `;
+}
+
+function applyReactionToMessage(messageId, emoji) {
+    if (!activeContactId) return;
+    const list = messagesByContact[activeContactId] || [];
+    const msg = list.find(m => m.id === messageId);
     if (!msg) return;
 
     if (!msg.reactions) msg.reactions = {};
-    msg.reactions[emoji] = msg.reactions[emoji] ? 0 : 1;
+    msg.reactions[emoji] = (msg.reactions[emoji] || 0) + 1;
 
-    saveAll();
-    if (activeContactId === contactId) {
-        renderMessages(contact);
-    }
-};
-
-// Tanlangan bitta xabarni o'chirish
-window.deleteMessage = function(contactId, msgId) {
-    const contact = contacts.find(c => c.id === contactId);
-    if (!contact) return;
-
-    contact.messages = contact.messages.filter(m => m.id !== msgId);
-    saveAll();
-    renderContacts(searchInput.value);
-    if (activeContactId === contactId) {
-        renderMessages(contact);
-    }
-};
-
-function getCurrentTime() {
-    return new Date().toTimeString().slice(0, 5);
+    saveState();
+    renderMessages();
 }
 
-// Xabar yuborish (1 ta ptichka bilan ketadi, o'qilsa 2 ta bo'ladi)
-function sendMessage(type, content, fileName = '') {
+function sendReaction(messageId, emoji) {
     if (!activeContactId) return;
     const contact = contacts.find(c => c.id === activeContactId);
+    applyReactionToMessage(messageId, emoji);
 
-    const newMsg = {
-        id: Date.now(),
-        type,
-        content,
-        fileName,
-        sender: 'out',
+    socket.emit('add_reaction', {
+        roomId: CURRENT_ROOM,
+        senderPhone: currentUser?.phone,
+        targetPhone: contact?.phone,
+        messageId,
+        emoji
+    });
+}
+
+socket.on('add_reaction', ({ messageId, emoji }) => {
+    applyReactionToMessage(messageId, emoji);
+});
+
+function renderMessages() {
+    if (!messagesContainerEl || !activeContactId) return;
+    const list = messagesByContact[activeContactId] || [];
+    messagesContainerEl.innerHTML = '';
+
+    list.forEach(msg => {
+        const div = document.createElement('div');
+        div.className = `message-item ${msg.sender === 'me' ? 'outgoing' : 'incoming'}`;
+        div.dataset.id = msg.id;
+
+        const statusMark = msg.sender === 'me'
+            ? `<span class="msg-status">${msg.read ? '✓✓' : '✓'}</span>`
+            : '';
+
+        const pickerButtons = REACTION_EMOJIS.map(emoji =>
+            `<button type="button" class="reaction-picker-btn" data-msg-id="${msg.id}" data-emoji="${emoji}">${emoji}</button>`
+        ).join('');
+
+        div.innerHTML = `
+            <div class="message-bubble">
+                <div class="message-text">${escapeHtml(msg.text)}</div>
+                <div class="message-meta">
+                    <span class="message-time">${escapeHtml(msg.time)}</span>
+                    ${statusMark}
+                </div>
+                ${renderReactionsHtml(msg)}
+                <div class="reaction-picker">${pickerButtons}</div>
+            </div>
+        `;
+
+        div.querySelectorAll('.reaction-picker-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                sendReaction(btn.dataset.msgId, btn.dataset.emoji);
+            });
+        });
+
+        messagesContainerEl.appendChild(div);
+    });
+
+    messagesContainerEl.scrollTop = messagesContainerEl.scrollHeight;
+}
+
+function markUnreadMessagesAsRead(contact) {
+    if (!activeContactId || !contact) return;
+    const list = messagesByContact[activeContactId] || [];
+    let changed = false;
+
+    list.forEach(msg => {
+        if (msg.sender === 'them' && !msg.read) {
+            msg.read = true;
+            changed = true;
+            socket.emit('message_read', {
+                roomId: CURRENT_ROOM,
+                senderPhone: currentUser?.phone,
+                targetPhone: contact.phone,
+                messageId: msg.id
+            });
+        }
+    });
+
+    if (changed) saveState();
+}
+
+messageFormEl?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!activeContactId) return;
+    const contact = contacts.find(c => c.id === activeContactId);
+    if (!contact) return;
+
+    const text = messageInputEl?.value.trim();
+    if (!text) return;
+
+    const newMessage = {
+        id: 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        text,
+        sender: 'me',
         time: getCurrentTime(),
         read: false,
         reactions: {}
     };
 
-    contact.messages.push(newMsg);
-    saveAll();
-    renderMessages(contact);
-    renderContacts(searchInput.value);
+    if (!messagesByContact[activeContactId]) {
+        messagesByContact[activeContactId] = [];
+    }
+    messagesByContact[activeContactId].push(newMessage);
+    saveState();
+    renderMessages();
+    renderContacts();
 
-    socket.emit('typing', { roomId: CURRENT_ROOM, isTyping: false });
+    messageInputEl.value = '';
+    socket.emit('typing', {
+        roomId: CURRENT_ROOM,
+        senderPhone: currentUser?.phone,
+        targetPhone: contact.phone,
+        isTyping: false
+    });
+
     socket.emit('send_message', {
         roomId: CURRENT_ROOM,
-        message: newMsg
+        senderPhone: currentUser?.phone,
+        targetPhone: contact.phone,
+        message: {
+            ...newMessage,
+            sender: 'them'
+        }
     });
-}
+});
 
-// Narigi odamning onlayn/oflayn holati
-socket.on('peer_status', (status) => {
-    isPeerOnline = status.online;
-    if (status.lastSeen) {
-        peerLastSeen = status.lastSeen;
+socket.on('receive_message', (incomingMsg) => {
+    if (!incomingMsg) return;
+
+    let targetContact = contacts.find(c =>
+        incomingMsg.senderPhone &&
+        normalizePhone(c.phone) === normalizePhone(incomingMsg.senderPhone)
+    );
+
+    if (!targetContact && incomingMsg.senderPhone) {
+        targetContact = {
+            id: 'c_' + normalizePhone(incomingMsg.senderPhone),
+            name: incomingMsg.senderName || incomingMsg.senderPhone,
+            phone: incomingMsg.senderPhone
+        };
+        contacts.push(targetContact);
     }
-    updateChatStatusText(false);
-});
 
-// Narigi odam yozayotganini ko'rsatish
-socket.on('user_typing', (isTyping) => {
-    updateChatStatusText(isTyping);
-});
+    if (!targetContact && contacts.length > 0) {
+        targetContact = contacts[0];
+    }
 
-// Boshqa odamdan real xabar kelganda
-socket.on('receive_message', (msg) => {
-    const targetContact = contacts.find(c => c.id === activeContactId) || contacts[0];
     if (!targetContact) return;
 
-    const isChatOpen = activeContactId === targetContact.id && !document.hidden;
+    if (!messagesByContact[targetContact.id]) {
+        messagesByContact[targetContact.id] = [];
+    }
 
-    targetContact.messages.push({
-        ...msg,
-        sender: 'in',
-        read: isChatOpen,
-        reactions: msg.reactions || {}
+    messagesByContact[targetContact.id].push({
+        ...incomingMsg,
+        sender: 'them',
+        read: activeContactId === targetContact.id
     });
 
-    saveAll();
-    renderContacts(searchInput.value);
+    saveState();
+    renderContacts();
 
-    if (isChatOpen) {
-        renderMessages(targetContact);
+    if (activeContactId === targetContact.id) {
+        renderMessages();
         socket.emit('message_read', {
             roomId: CURRENT_ROOM,
-            messageId: msg.id
+            senderPhone: currentUser?.phone,
+            targetPhone: targetContact.phone,
+            messageId: incomingMsg.id
         });
     }
 });
 
-// Xabar o'qilganda 2 ta ptichkaga o'tkazish
-socket.on('message_was_read', (msgId) => {
-    contacts.forEach(c => {
-        const m = c.messages.find(item => item.id === msgId);
-        if (m) m.read = true;
-    });
-    saveAll();
-    if (activeContactId) {
-        const active = contacts.find(c => c.id === activeContactId);
-        if (active) renderMessages(active);
-    }
-});
-
-// Matnli xabar va "yozmoqda..." signali
-messageInput.addEventListener('input', () => {
-    if (messageInput.value.trim().length > 0) {
-        sendBtn.classList.remove('hidden');
-        recordBtn.classList.add('hidden');
-        socket.emit('typing', { roomId: CURRENT_ROOM, isTyping: true });
-
-        clearTimeout(typingTimeout);
-        typingTimeout = setTimeout(() => {
-            socket.emit('typing', { roomId: CURRENT_ROOM, isTyping: false });
-        }, 1500);
-    } else {
-        sendBtn.classList.add('hidden');
-        recordBtn.classList.remove('hidden');
-        socket.emit('typing', { roomId: CURRENT_ROOM, isTyping: false });
-    }
-});
-
-sendBtn.addEventListener('click', () => {
-    const text = messageInput.value.trim();
-    if (text) {
-        sendMessage('text', text);
-        messageInput.value = '';
-        sendBtn.classList.add('hidden');
-        recordBtn.classList.remove('hidden');
-    }
-});
-
-messageInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') sendBtn.click();
-});
-
-// Rasm va fayl yuborish
-fileInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    readFileAsDataURL(file, (dataUrl) => {
-        if (file.type.startsWith('image/')) {
-            sendMessage('image', dataUrl);
-        } else {
-            sendMessage('file', dataUrl, file.name);
-        }
-    });
-    fileInput.value = '';
-});
-
-// Ovozli xabar
-recordBtn.addEventListener('click', async () => {
-    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
-
-            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-            mediaRecorder.onstop = () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                readFileAsDataURL(audioBlob, (dataUrl) => sendMessage('audio', dataUrl));
-                stream.getTracks().forEach(track => track.stop());
-            };
-
-            mediaRecorder.start();
-            recordBtn.classList.add('recording');
-        } catch (err) {
-            alert("Mikrofonga ruxsat berilmadi yoki qurilma topilmadi!");
-        }
-    } else {
-        mediaRecorder.stop();
-        recordBtn.classList.remove('recording');
-    }
-});
-
-// Emoji paneli
-emojiBtn.addEventListener('click', () => emojiPicker.classList.toggle('hidden'));
-emojiPicker.addEventListener('click', (e) => {
-    if (e.target.tagName === 'SPAN') {
-        messageInput.value += e.target.textContent;
-        messageInput.dispatchEvent(new Event('input'));
-        emojiPicker.classList.add('hidden');
-    }
-});
-
-// Modallarni yopish
-document.querySelectorAll('.close-modal').forEach(btn => {
-    btn.addEventListener('click', () => {
-        document.getElementById(btn.dataset.target).classList.add('hidden');
-    });
-});
-
-// Alohida Kontaktlar ro'yxati oynasi
-const directoryModal = document.getElementById('contacts-directory-modal');
-const directoryListEl = document.getElementById('directory-list');
-const directorySearchInput = document.getElementById('directory-search-input');
-
-function renderDirectory(filter = '') {
-    directoryListEl.innerHTML = '';
-    const list = contacts.filter(c =>
-        c.name.toLowerCase().includes(filter.toLowerCase()) || c.phone.includes(filter)
-    );
-
-    if (list.length === 0) {
-        directoryListEl.innerHTML = `<p style="text-align:center; color:#64748b; padding:16px;">Kontakt topilmadi</p>`;
-        return;
-    }
-
-    list.forEach(c => {
-        const item = document.createElement('div');
-        item.className = 'directory-item';
-        item.innerHTML = `
-            <div class="directory-user">
-                <div class="avatar">${getAvatarContent(c.avatar, c.name)}</div>
-                <div>
-                    <h4>${c.name}</h4>
-                    <small>${c.phone}</small>
-                </div>
-            </div>
-            <div class="directory-btns">
-                <button type="button" class="dir-btn chat-btn" title="Yozish" onclick="dirOpenChat(${c.id})"><i class="fas fa-comment"></i></button>
-                <button type="button" class="dir-btn edit-btn" title="Tahrirlash" onclick="dirEditContact(${c.id})"><i class="fas fa-edit"></i></button>
-                <button type="button" class="dir-btn del-btn" title="O'chirish" onclick="dirDeleteContact(${c.id})"><i class="fas fa-trash"></i></button>
-            </div>
-        `;
-        directoryListEl.appendChild(item);
-    });
-}
-
-document.getElementById('open-contacts-list-btn').addEventListener('click', () => {
-    directorySearchInput.value = '';
-    renderDirectory();
-    directoryModal.classList.remove('hidden');
-});
-
-directorySearchInput.addEventListener('input', (e) => renderDirectory(e.target.value));
-
-window.dirOpenChat = function(id) {
-    directoryModal.classList.add('hidden');
-    openChat(id);
-};
-
-window.dirEditContact = function(id) {
-    directoryModal.classList.add('hidden');
-    openEditContactModal(id);
-};
-
-window.dirDeleteContact = function(id) {
-    const contact = contacts.find(c => c.id === id);
-    if (!contact) return;
-    if (confirm(`"${contact.name}" kontaktini o'chirishni xohlaysizmi?`)) {
-        contacts = contacts.filter(c => c.id !== id);
-        if (activeContactId === id) {
-            activeContactId = null;
-            activeChatEl.classList.add('hidden');
-            emptyChatEl.classList.remove('hidden');
-        }
-        saveAll();
-        renderContacts(searchInput.value);
-        renderDirectory(directorySearchInput.value);
-    }
-};
-
-// Kontakt qo'shish va tahrirlash
-const contactModal = document.getElementById('contact-modal');
-const contactForm = document.getElementById('contact-form');
-const contactModalTitle = document.getElementById('contact-modal-title');
-const editContactIdInput = document.getElementById('edit-contact-id');
-const contactNameInput = document.getElementById('contact-name');
-const contactPhoneInput = document.getElementById('contact-phone');
-const contactAvatarPreview = document.getElementById('contact-avatar-preview');
-const contactAvatarFile = document.getElementById('contact-avatar-file');
-
-function updateContactAvatarPreview() {
-    contactAvatarPreview.innerHTML = getAvatarContent(tempContactAvatar, contactNameInput.value || "K");
-}
-
-contactNameInput.addEventListener('input', () => {
-    if (!tempContactAvatar) updateContactAvatarPreview();
-});
-
-contactAvatarFile.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    readFileAsDataURL(file, (dataUrl) => {
-        tempContactAvatar = dataUrl;
-        updateContactAvatarPreview();
-    });
-    contactAvatarFile.value = '';
-});
-
-document.getElementById('clear-contact-avatar-btn').addEventListener('click', () => {
-    tempContactAvatar = "";
-    updateContactAvatarPreview();
-});
-
-document.getElementById('open-add-modal-btn').addEventListener('click', () => {
-    contactModalTitle.textContent = "Yangi kontakt qo'shish";
-    editContactIdInput.value = '';
-    contactNameInput.value = '';
-    contactPhoneInput.value = '+998 ';
-    tempContactAvatar = "";
-    updateContactAvatarPreview();
-    contactModal.classList.remove('hidden');
-});
-
-function openEditContactModal(id) {
-    const contact = contacts.find(c => c.id === id);
-    if (!contact) return;
-    contactModalTitle.textContent = "Kontaktni tahrirlash";
-    editContactIdInput.value = contact.id;
-    contactNameInput.value = contact.name;
-    contactPhoneInput.value = contact.phone;
-    tempContactAvatar = contact.avatar || "";
-    updateContactAvatarPreview();
-    contactModal.classList.remove('hidden');
-}
-
-document.getElementById('edit-contact-btn').addEventListener('click', () => {
-    if (activeContactId) openEditContactModal(activeContactId);
-});
-
-contactForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = contactNameInput.value.trim();
-    const phone = contactPhoneInput.value.trim();
-    const editId = editContactIdInput.value;
-
-    if (phone.length < 17) {
-        alert("Iltimos, telefon raqamni to'liq kiriting: +998 xx xxx xx xx");
-        return;
-    }
-
-    if (editId) {
-        const contact = contacts.find(c => c.id == editId);
-        if (contact) {
-            contact.name = name;
-            contact.phone = phone;
-            contact.avatar = tempContactAvatar;
-            saveAll();
-            renderContacts(searchInput.value);
-            if (activeContactId == editId) openChat(contact.id);
-        }
-    } else {
-        const newContact = {
-            id: Date.now(),
-            name,
-            phone,
-            avatar: tempContactAvatar,
-            messages: []
-        };
-        contacts.unshift(newContact);
-        saveAll();
-        renderContacts(searchInput.value);
-        openChat(newContact.id);
-    }
-
-    contactModal.classList.add('hidden');
-});
-
-document.getElementById('delete-contact-btn').addEventListener('click', () => {
+socket.on('message_was_read', (messageId) => {
     if (!activeContactId) return;
-    dirDeleteContact(activeContactId);
-});
-
-// Mening profilimni ko'rish va tahrirlash
-const profileModal = document.getElementById('profile-modal');
-const profileForm = document.getElementById('profile-form');
-const profileModalAvatar = document.getElementById('profile-modal-avatar');
-const myAvatarFile = document.getElementById('my-avatar-file');
-
-document.getElementById('open-profile-btn').addEventListener('click', () => {
-    tempMyAvatar = myProfile.avatar || "";
-    document.getElementById('my-name-input').value = myProfile.name;
-    document.getElementById('my-phone-input').value = myProfile.phone;
-    document.getElementById('my-bio-input').value = myProfile.bio;
-    profileModalAvatar.innerHTML = getAvatarContent(tempMyAvatar, myProfile.name);
-    profileModal.classList.remove('hidden');
-});
-
-myAvatarFile.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    readFileAsDataURL(file, (dataUrl) => {
-        tempMyAvatar = dataUrl;
-        profileModalAvatar.innerHTML = getAvatarContent(tempMyAvatar, document.getElementById('my-name-input').value);
-    });
-    myAvatarFile.value = '';
-});
-
-profileForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const name = document.getElementById('my-name-input').value.trim();
-    const phone = document.getElementById('my-phone-input').value.trim();
-    const bio = document.getElementById('my-bio-input').value.trim();
-
-    if (phone.length < 17) {
-        alert("Telefon raqamni to'liq kiriting: +998 xx xxx xx xx");
-        return;
+    const list = messagesByContact[activeContactId] || [];
+    const msg = list.find(m => m.id === messageId);
+    if (msg) {
+        msg.read = true;
+        saveState();
+        renderMessages();
     }
-
-    myProfile = { name, phone, bio, avatar: tempMyAvatar };
-    saveAll();
-    renderMyProfile();
-    profileModal.classList.add('hidden');
 });
 
-// Qo'ng'iroq oynasi
-const callModal = document.getElementById('call-modal');
-const callTimerEl = document.getElementById('call-timer');
+messageInputEl?.addEventListener('input', () => {
+    if (!activeContactId) return;
+    const contact = contacts.find(c => c.id === activeContactId);
+    if (!contact) return;
 
+    socket.emit('typing', {
+        roomId: CURRENT_ROOM,
+        senderPhone: currentUser?.phone,
+        targetPhone: contact.phone,
+        isTyping: true
+    });
+
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => {
+        socket.emit('typing', {
+            roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone,
+            targetPhone: contact.phone,
+            isTyping: false
+        });
+    }, 1000);
+});
+
+socket.on('user_typing', (isTyping) => {
+    if (!chatHeaderStatusEl) return;
+    if (isTyping) {
+        chatHeaderStatusEl.textContent = "yozmoqda...";
+    } else if (activeContactId) {
+        const contact = contacts.find(c => c.id === activeContactId);
+        if (contact) chatHeaderStatusEl.textContent = "onlayn";
+    }
+});
+
+socket.on('peer_status', ({ online, lastSeen }) => {
+    if (!chatHeaderStatusEl) return;
+    if (online) {
+        chatHeaderStatusEl.textContent = "onlayn";
+    } else if (lastSeen) {
+        chatHeaderStatusEl.textContent = `oxirgi marta ${lastSeen} da onlayn edi`;
+    } else {
+        chatHeaderStatusEl.textContent = "oflayn";
+    }
+});
+
+// --- 4. WebRTC Audio / Video qo'ng'iroqlar ---
 let peerConnection = null;
 let localStream = null;
 
 const rtcConfig = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
+
+function startCallTimer() {
+    clearInterval(callInterval);
+    callSeconds = 0;
+    callInterval = setInterval(() => {
+        callSeconds++;
+        const mins = String(Math.floor(callSeconds / 60)).padStart(2, '0');
+        const secs = String(callSeconds % 60).padStart(2, '0');
+        if (callTimerEl) callTimerEl.textContent = `${mins}:${secs}`;
+    }, 1000);
+}
 
 async function setupPeerConnection(isVideo) {
     localStream = await navigator.mediaDevices.getUserMedia({
@@ -707,9 +483,12 @@ async function setupPeerConnection(isVideo) {
     };
 
     peerConnection.onicecandidate = (event) => {
+        const contact = contacts.find(c => c.id === activeContactId);
         if (event.candidate) {
             socket.emit('ice_candidate', {
                 roomId: CURRENT_ROOM,
+                senderPhone: currentUser?.phone,
+                targetPhone: contact?.phone,
                 candidate: event.candidate
             });
         }
@@ -719,40 +498,66 @@ async function setupPeerConnection(isVideo) {
 async function startCall(isVideo = false) {
     if (!activeContactId) return;
     const contact = contacts.find(c => c.id === activeContactId);
+    if (!contact) return;
 
-    document.getElementById('call-avatar').innerHTML = getAvatarContent(contact.avatar, contact.name);
-    document.getElementById('call-contact-name').textContent = contact.name;
-    document.getElementById('call-contact-phone').textContent = contact.phone;
-    callTimerEl.textContent = isVideo ? "Video qo'ng'iroq qilinmoqda..." : "Qo'ng'iroq qilinmoqda...";
-    callModal.classList.remove('hidden');
+    connectToContact(contact);
+
+    if (callAvatarEl) callAvatarEl.textContent = contact.name.charAt(0).toUpperCase();
+    if (callContactNameEl) callContactNameEl.textContent = contact.name;
+    if (callContactPhoneEl) callContactPhoneEl.textContent = contact.phone;
+    if (callTimerEl) callTimerEl.textContent = isVideo ? "Video qo'ng'iroq qilinmoqda..." : "Qo'ng'iroq qilinmoqda...";
+    callModal?.classList.remove('hidden');
 
     try {
         await setupPeerConnection(isVideo);
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
-        socket.emit('call_offer', { roomId: CURRENT_ROOM, offer, isVideo });
+        socket.emit('call_offer', {
+            roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone,
+            targetPhone: contact.phone,
+            offer,
+            isVideo
+        });
     } catch (err) {
-        alert("Mikrofon yoki kameraga ruxsat berilmadi!");
+        alert("Mikrofon yoki kameraga ruxsat berilmadi yoki ulanishda xatolik bo'ldi.");
         endCallCleanup(false);
     }
 }
 
-socket.on('call_offer', async ({ offer, isVideo }) => {
-    const accept = confirm(isVideo ? "Kiruvchi video qo'ng'iroq. Qabul qilasizmi?" : "Kiruvchi audio qo'ng'iroq. Qabul qilasizmi?");
+socket.on('call_offer', async ({ offer, isVideo, roomId, senderPhone }) => {
+    if (roomId) CURRENT_ROOM = roomId;
+
+    const accept = confirm(
+        isVideo
+            ? `${senderPhone || 'Foydalanuvchi'} dan kiruvchi video qo'ng'iroq. Qabul qilasizmi?`
+            : `${senderPhone || 'Foydalanuvchi'} dan kiruvchi audio qo'ng'iroq. Qabul qilasizmi?`
+    );
+
     if (!accept) {
-        socket.emit('end_call', CURRENT_ROOM);
+        socket.emit('end_call', {
+            roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone,
+            targetPhone: senderPhone
+        });
         return;
     }
 
-    callModal.classList.remove('hidden');
-    callTimerEl.textContent = "Ulandi...";
+    callModal?.classList.remove('hidden');
+    if (callTimerEl) callTimerEl.textContent = "Ulandi...";
 
     try {
         await setupPeerConnection(isVideo);
         await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
-        socket.emit('call_answer', { roomId: CURRENT_ROOM, answer });
+        startCallTimer();
+        socket.emit('call_answer', {
+            roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone,
+            targetPhone: senderPhone,
+            answer
+        });
     } catch (err) {
         alert("Qo'ng'iroqni qabul qilishda xatolik!");
         endCallCleanup(false);
@@ -760,21 +565,32 @@ socket.on('call_offer', async ({ offer, isVideo }) => {
 });
 
 socket.on('call_answer', async ({ answer }) => {
-    if (peerConnection) {
+    if (peerConnection && answer) {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-        callTimerEl.textContent = "Ulandi...";
+        startCallTimer();
     }
 });
 
 socket.on('ice_candidate', async ({ candidate }) => {
     if (peerConnection && candidate) {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+            console.error("ICE candidate xatosi:", err);
+        }
     }
 });
 
 function endCallCleanup(notifyPeer = true) {
     clearInterval(callInterval);
-    if (notifyPeer) socket.emit('end_call', CURRENT_ROOM);
+    if (notifyPeer) {
+        const contact = contacts.find(c => c.id === activeContactId);
+        socket.emit('end_call', {
+            roomId: CURRENT_ROOM,
+            senderPhone: currentUser?.phone,
+            targetPhone: contact?.phone
+        });
+    }
     if (peerConnection) {
         peerConnection.close();
         peerConnection = null;
@@ -783,53 +599,18 @@ function endCallCleanup(notifyPeer = true) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
     }
-    callModal.classList.add('hidden');
+    callModal?.classList.add('hidden');
 }
 
 socket.on('end_call', () => endCallCleanup(false));
 
-document.getElementById('end-call-btn').addEventListener('click', () => endCallCleanup(true));
+document.getElementById('audio-call-btn')?.addEventListener('click', () => startCall(false));
+document.getElementById('video-call-btn')?.addEventListener('click', () => startCall(true));
+document.getElementById('end-call-btn')?.addEventListener('click', () => endCallCleanup(true));
 
-document.getElementById('audio-call-btn').addEventListener('click', () => startCall(false));
-document.getElementById('video-call-btn').addEventListener('click', () => startCall(true));
-
-document.getElementById('end-call-btn').addEventListener('click', () => {
-    clearInterval(callInterval);
-    callModal.classList.add('hidden');
-});
-
-document.getElementById('mute-call-btn').addEventListener('click', (e) => {
-    const icon = e.currentTarget.querySelector('i');
-    icon.classList.toggle('fa-microphone');
-    icon.classList.toggle('fa-microphone-slash');
-});
-
-searchInput.addEventListener('input', (e) => renderContacts(e.target.value));
-
-document.getElementById('clear-chat-btn').addEventListener('click', () => {
-    if (!activeContactId) return;
-    const contact = contacts.find(c => c.id === activeContactId);
-    if (confirm("Ushbu suhbat tarixini tozalamoqchimisiz?")) {
-        contact.messages = [];
-        saveAll();
-        renderMessages(contact);
-        renderContacts(searchInput.value);
-    }
-});function sendReaction(messageId, emoji) {
-    // 1. O'zingizda reaksiyani qo'shish/yangilash funksiyangizni chaqiring
-    applyReactionToMessage(messageId, emoji);
-
-    // 2. Ikkinchi qurilmaga Socket.io orqali yuborish
-    socket.emit('add_reaction', {
-        roomId: CURRENT_ROOM,
-        messageId: messageId,
-        emoji: emoji
-    });
-}
-
-socket.on('add_reaction', ({ messageId, emoji }) => {
-    applyReactionToMessage(messageId, emoji);
-});
-
-renderMyProfile();
+// --- Boshlang'ich ishga tushirish ---
+initAuthState();
 renderContacts();
+if (contacts.length > 0) {
+    selectContact(contacts[0].id);
+}

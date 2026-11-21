@@ -815,6 +815,20 @@ document.getElementById('clear-chat-btn').addEventListener('click', () => {
         renderMessages(contact);
         renderContacts(searchInput.value);
     }
+});function sendReaction(messageId, emoji) {
+    // 1. O'zingizda reaksiyani qo'shish/yangilash funksiyangizni chaqiring
+    applyReactionToMessage(messageId, emoji);
+
+    // 2. Ikkinchi qurilmaga Socket.io orqali yuborish
+    socket.emit('add_reaction', {
+        roomId: CURRENT_ROOM,
+        messageId: messageId,
+        emoji: emoji
+    });
+}
+
+socket.on('add_reaction', ({ messageId, emoji }) => {
+    applyReactionToMessage(messageId, emoji);
 });
 
 renderMyProfile();

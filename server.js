@@ -22,6 +22,9 @@ function getCurrentTime() {
 }
 
 io.on('connection', (socket) => {
+    socket.on('add_reaction', (data) => {
+        socket.to(data.roomId).emit('add_reaction', data);
+    });
     socket.on('call_offer', (data) => {
         socket.to(data.roomId).emit('call_offer', data);
     });

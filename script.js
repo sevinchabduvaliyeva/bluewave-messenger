@@ -4,6 +4,43 @@ function normalizePhone(phone = '') {
     return String(phone).replace(/\D/g, '');
 }
 
+function formatUzPhoneInput(rawValue = '') {
+    let digits = String(rawValue).replace(/\D/g, '');
+
+    // Agar 998 bilan boshlanmasa, 998 ni oldiga qo'shamiz
+    if (!digits.startsWith('998')) {
+        digits = '998' + digits;
+    }
+
+    // +998 va 9 ta raqam = jami 12 raqam
+    digits = digits.slice(0, 12);
+    const local = digits.slice(3); // XX XXX XX XX qismi
+
+    let formatted = '+998';
+    if (local.length > 0) formatted += ' ' + local.slice(0, 2);
+    if (local.length > 2) formatted += ' ' + local.slice(2, 5);
+    if (local.length > 5) formatted += ' ' + local.slice(5, 7);
+    if (local.length > 7) formatted += ' ' + local.slice(7, 9);
+
+    return formatted;
+}
+
+const authPhoneInput = document.getElementById('auth-phone');
+
+authPhoneInput?.addEventListener('focus', () => {
+    if (!authPhoneInput.value.trim()) {
+        authPhoneInput.value = '+998 ';
+    }
+});
+
+authPhoneInput?.addEventListener('input', (e) => {
+    const caretAtEnd = e.target.selectionStart === e.target.value.length;
+    e.target.value = formatUzPhoneInput(e.target.value);
+    if (caretAtEnd) {
+        e.target.setSelectionRange(e.target.value.length, e.target.value.length);
+    }
+});
+
 function getDirectRoomId(phoneA, phoneB) {
     const a = normalizePhone(phoneA);
     const b = normalizePhone(phoneB);

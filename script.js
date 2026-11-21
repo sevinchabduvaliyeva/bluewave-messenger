@@ -675,7 +675,48 @@ profileForm.addEventListener('submit', (e) => {
 const callModal = document.getElementById('call-modal');
 const callTimerEl = document.getElementById('call-timer');
 
-function startCall(isVideo = false) {
+let peerConnection = null;
+let localStream = null;
+
+const rtcConfig = {
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+};
+
+async function setupPeerConnection(isVideo) {
+    localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: isVideo
+    });
+
+    peerConnection = new RTCPeerConnection(rtcConfig);
+
+    localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+    });
+
+    const remoteAudio = document.getElementById('remote-audio') || (() => {
+        const el = document.createElement('audio');
+        el.id = 'remote-audio';
+        el.autoplay = true;
+        document.body.appendChild(el);
+        return el;
+    })();
+
+    peerConnection.ontrack = (event) => {
+        remoteAudio.srcObject = event.streams[0];
+    };
+
+    peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+            socket.emit('ice_candidate', {
+                roomId: CURRENT_ROOM,
+                candidate: event.candidate
+            });
+        }
+    };
+}
+
+async function startCall(isVideo = false) {
     if (!activeContactId) return;
     const contact = contacts.find(c => c.id === activeContactId);
 
@@ -685,18 +726,69 @@ function startCall(isVideo = false) {
     callTimerEl.textContent = isVideo ? "Video qo'ng'iroq qilinmoqda..." : "Qo'ng'iroq qilinmoqda...";
     callModal.classList.remove('hidden');
 
-    let seconds = 0;
-    clearInterval(callInterval);
-    callInterval = setInterval(() => {
-        seconds++;
-        if (seconds >= 2) {
-            const activeSec = seconds - 2;
-            const mins = String(Math.floor(activeSec / 60)).padStart(2, '0');
-            const secs = String(activeSec % 60).padStart(2, '0');
-            callTimerEl.textContent = `${mins}:${secs}`;
-        }
-    }, 1000);
+    try {
+        await setupPeerConnection(isVideo);
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit('call_offer', { roomId: CURRENT_ROOM, offer, isVideo });
+    } catch (err) {
+        alert("Mikrofon yoki kameraga ruxsat berilmadi!");
+        endCallCleanup(false);
+    }
 }
+
+socket.on('call_offer', async ({ offer, isVideo }) => {
+    const accept = confirm(isVideo ? "Kiruvchi video qo'ng'iroq. Qabul qilasizmi?" : "Kiruvchi audio qo'ng'iroq. Qabul qilasizmi?");
+    if (!accept) {
+        socket.emit('end_call', CURRENT_ROOM);
+        return;
+    }
+
+    callModal.classList.remove('hidden');
+    callTimerEl.textContent = "Ulandi...";
+
+    try {
+        await setupPeerConnection(isVideo);
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit('call_answer', { roomId: CURRENT_ROOM, answer });
+    } catch (err) {
+        alert("Qo'ng'iroqni qabul qilishda xatolik!");
+        endCallCleanup(false);
+    }
+});
+
+socket.on('call_answer', async ({ answer }) => {
+    if (peerConnection) {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        callTimerEl.textContent = "Ulandi...";
+    }
+});
+
+socket.on('ice_candidate', async ({ candidate }) => {
+    if (peerConnection && candidate) {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+});
+
+function endCallCleanup(notifyPeer = true) {
+    clearInterval(callInterval);
+    if (notifyPeer) socket.emit('end_call', CURRENT_ROOM);
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+    if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+    }
+    callModal.classList.add('hidden');
+}
+
+socket.on('end_call', () => endCallCleanup(false));
+
+document.getElementById('end-call-btn').addEventListener('click', () => endCallCleanup(true));
 
 document.getElementById('audio-call-btn').addEventListener('click', () => startCall(false));
 document.getElementById('video-call-btn').addEventListener('click', () => startCall(true));

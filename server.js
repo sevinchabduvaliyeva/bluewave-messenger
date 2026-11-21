@@ -22,6 +22,21 @@ function getCurrentTime() {
 }
 
 io.on('connection', (socket) => {
+    socket.on('call_offer', (data) => {
+        socket.to(data.roomId).emit('call_offer', data);
+    });
+
+    socket.on('call_answer', (data) => {
+        socket.to(data.roomId).emit('call_answer', data);
+    });
+
+    socket.on('ice_candidate', (data) => {
+        socket.to(data.roomId).emit('ice_candidate', data);
+    });
+
+    socket.on('end_call', (roomId) => {
+        socket.to(roomId).emit('end_call');
+    });
     socket.on('join_room', (roomId) => {
         socket.join(roomId);
         socket.currentRoom = roomId;

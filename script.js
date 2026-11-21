@@ -7,42 +7,7 @@ let myProfile = JSON.parse(localStorage.getItem('bluewave_profile')) || {
     avatar: ""
 };
 
-let contacts = JSON.parse(localStorage.getItem('bluewave_contacts')) || [
-    {
-        id: 1,
-        name: "Sardorbek Alimov",
-        phone: "+998 90 123 45 67",
-        avatar: "",
-        messages: [
-            {
-                id: 101,
-                type: 'text',
-                content: "Salom! Yangi dizayn juda zo'r chiqibdi!",
-                sender: 'in',
-                time: "10:15",
-                read: true,
-                reactions: { "👍": 1 }
-            }
-        ]
-    },
-    {
-        id: 2,
-        name: "Madina Karimova",
-        phone: "+998 93 987 65 43",
-        avatar: "",
-        messages: [
-            {
-                id: 102,
-                type: 'text',
-                content: "Bugun soat 15:00 da qo'ng'iroqlashamizmi?",
-                sender: 'in',
-                time: "11:40",
-                read: true,
-                reactions: {}
-            }
-        ]
-    }
-];
+let contacts = JSON.parse(localStorage.getItem('bluewave_contacts')) || [];
 
 let activeContactId = null;
 let mediaRecorder = null;

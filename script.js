@@ -19,6 +19,7 @@ let tempContactAvatar = "";
 let tempMyAvatar = "";
 
 // DOM elementlar
+const appContainerEl = document.querySelector('.app-container');
 const contactsListEl = document.getElementById('contacts-list');
 const searchInput = document.getElementById('search-input');
 const emptyChatEl = document.getElementById('empty-chat');
@@ -273,6 +274,7 @@ function openChat(id) {
 
     emptyChatEl.classList.add('hidden');
     activeChatEl.classList.remove('hidden');
+    appContainerEl?.classList.add('mobile-chat-open');
 
     document.getElementById('chat-name').textContent = `${contact.name} (${contact.phone})`;
     document.getElementById('chat-avatar').innerHTML = getAvatarContent(contact.avatar, contact.name);
@@ -285,6 +287,15 @@ function openChat(id) {
     updateChatStatusText(false);
 }
 
+// Mobil ekranda kontaktlar ro'yxatiga qaytish
+document.getElementById('mobile-back-btn')?.addEventListener('click', () => {
+    activeContactId = null;
+    appContainerEl?.classList.remove('mobile-chat-open');
+    activeChatEl.classList.add('hidden');
+    emptyChatEl.classList.remove('hidden');
+    renderContacts(searchInput.value);
+});
+
 function renderMessages(contact) {
     messagesContainer.innerHTML = '';
     contact.messages.forEach(msg => {
@@ -293,7 +304,6 @@ function renderMessages(contact) {
         const wrapper = document.createElement('div');
         wrapper.className = `message-wrapper ${msg.sender === 'out' ? 'outgoing' : 'incoming'}`;
 
-        // Reaksiya va o'chirish tugmalari
         const reactionBtnsHtml = QUICK_REACTIONS.map(emoji =>
             `<button type="button" class="react-quick-btn" onclick="toggleReaction(${contact.id}, ${msg.id}, '${emoji}')">${emoji}</button>`
         ).join('');
@@ -328,7 +338,6 @@ function renderMessages(contact) {
                 : '<i class="fas fa-check tick-sent" title="Yuborildi"></i>';
         }
 
-        // Qo'yilgan reaksiyalar
         const reactionBadges = Object.entries(msg.reactions)
             .filter(([, count]) => count > 0)
             .map(([emoji, count]) =>
@@ -443,6 +452,7 @@ function sendMessage(type, content, fileName = '') {
         sender: 'out',
         senderPhone,
         senderName,
+        targetPhone: contact.phone,
         time: getCurrentTime(),
         read: false,
         reactions: {}
@@ -700,6 +710,7 @@ window.dirDeleteContact = function(id) {
         contacts = contacts.filter(c => c.id !== id);
         if (activeContactId === id) {
             activeContactId = null;
+            appContainerEl?.classList.remove('mobile-chat-open');
             activeChatEl.classList.add('hidden');
             emptyChatEl.classList.remove('hidden');
         }
